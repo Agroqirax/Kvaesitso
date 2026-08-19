@@ -55,13 +55,24 @@ class CalculatorRepositoryImpl(
             else -> {
                 withContext(Dispatchers.Default) {
                     try {
-                        val exp = Expression(query)
+                        val preprocessed = ExpressionPreprocessor.preprocess(query)
+                        val exp = Expression(preprocessed)
                         if (exp.checkSyntax()) {
-                            Calculator(term = query, solution = exp.calculate())
+                            Calculator(term = preprocessed, solution = exp.calculate())
                         } else {
-                            val exp2 = Expression(query.replace(',', '.').replace(';', ','))
+                            // Preprocess the swapped query rather than swapping the
+                            // preprocessed string: rewrites emit commas of their own
+                            // ("∛8" -> "root(3, 8)") that must survive the swap.
+                            val swapped = ExpressionPreprocessor.preprocess(
+                                query.replace(',', '.').replace(';', ',')
+                            )
+                            val exp2 = Expression(swapped)
                             if (exp2.checkSyntax()) {
-                                Calculator(term = query, solution = exp2.calculate())
+                                // Display the swapped form, not "preprocessed": the latter is
+                                // the string checkSyntax just rejected, so showing it would
+                                // pair an unparseable term with a solution ("√0,5" would read
+                                // "sqrt(0,5) = 0.707").
+                                Calculator(term = swapped, solution = exp2.calculate())
                             } else null
                         }
                     } catch (e: ArithmeticException) {
