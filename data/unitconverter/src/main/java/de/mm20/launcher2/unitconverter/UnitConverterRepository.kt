@@ -77,52 +77,16 @@ internal class UnitConverterRepositoryImpl(
         query: String,
         includeCurrencies: Boolean
     ): UnitConverter? {
-        val regex = Regex("""([+\-]?[\d+\-e,.]+|[^\d>\-]+)""")
+        val parsed = UnitConverterQueryParser.parse(query, separatorKeywords()) ?: return null
 
-        val matches = regex.findAll(query)
+        val converter = getAvailableConverters(includeCurrencies)
+            .findConverter(parsed.unit, parsed.outputUnit) ?: return null
 
-        var inputStr: String? = null
-        var inputValue: Double? = null
-        var inputUnit: String? = null
-        var outputUnit: String? = null
-
-        for ((i, match) in matches.withIndex()) {
-            when (i) {
-                0 -> {
-                    inputStr = match.value.trim()
-                    inputValue = inputStr.toDoubleOrNull()
-                        ?: inputStr.replace(',', '.').toDoubleOrNull()
-                                ?: return null
-                }
-                1 -> inputUnit = match.value.trim()
-                2 -> {
-                    if (!match.value.contains("-") && !match.value.contains(">")) {
-                        outputUnit = match.value.trim()
-                    }
-                }
-                3 -> {
-                    if (outputUnit == null) {
-                        outputUnit = match.value.trim()
-                        break
-                    } else {
-                        return null
-                    }
-                }
-                else -> return null
-            }
-        }
-
-        if (inputValue == null || inputUnit == null) {
-            return null
-        }
-
-        val converters = getAvailableConverters(includeCurrencies)
-
-        for (converter in converters) {
-            if (!converter.isValidUnit(inputUnit)) continue
-            if (outputUnit != null && !converter.isValidUnit(outputUnit)) continue
-            return converter.convert(context, inputUnit, inputValue, outputUnit)
-        }
-        return null
+        return converter.convert(context, parsed.unit, parsed.value, parsed.outputUnit)
     }
+
+    // Read per query, so a system language change takes effect without a restart.
+    private fun separatorKeywords(): Set<String> = UnitConverterQueryParser.separators(
+        context.getString(R.string.unit_converter_separators)
+    )
 }

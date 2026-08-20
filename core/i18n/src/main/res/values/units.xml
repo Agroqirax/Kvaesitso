@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools" tools:locale="en">
+    <!-- QUERY SYNTAX -->
+    <!--
+    Words separating the two units in a converter query, as in "10 cm to in". Bar-separated,
+    lowercase, no punctuation: Dutch "in|naar", German "in|nach". This is the full list for
+    your language, so include English "to" only if your users would type it. ("-" and ">"
+    always work.) A keyword may also be a unit symbol - German "10 in in cm" still works.
+    -->
+    <string name="unit_converter_separators">to</string>
     <!-- DIMENSIONS -->
     <string name="dimension_length">Length</string>
     <string name="dimension_mass">Mass</string>
