@@ -8,7 +8,15 @@ import de.mm20.launcher2.unitconverter.MeasureUnit
 interface Converter {
     val dimension: Dimension
 
-    suspend fun isValidUnit(symbol: String): Boolean
+    /**
+     * @param lenient also accept shorthand spellings: different casing, a plain-digit
+     * exponent ("cm2" for "cm²"), or a temperature without its degree sign ("C" for "°C").
+     *
+     * Callers must try every converter strictly before retrying leniently, so an exact
+     * spelling beats another unit's shorthand - Spanish "m" (metre) vs "M" (nautical mile).
+     * Use `List<Converter>.findConverter` rather than reimplementing that ordering.
+     */
+    suspend fun isValidUnit(symbol: String, lenient: Boolean = false): Boolean
 
     suspend fun convert(
         context: Context,

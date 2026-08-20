@@ -28,10 +28,18 @@ class CurrencyConverter(
 
     private val topCurrencies = arrayOf("USD", "EUR", "JPY", "GBP", "AUD")
 
-    override suspend fun isValidUnit(symbol: String): Boolean {
+    override suspend fun isValidUnit(symbol: String, lenient: Boolean): Boolean {
+        // isValidCurrency() upper-cases internally, so without this guard currencies would be
+        // lenient during the strict pass and could beat another dimension's exact spelling -
+        // "CUP" is both the Cuban peso and a volume unit.
+        if (!lenient && !isCanonicalSymbol(symbol)) return false
         return repository.isValidCurrency(symbol)
     }
 
+    /** ISO codes ("EUR") plus the aliases the repository knows verbatim ("€", "kr"). */
+    private fun isCanonicalSymbol(symbol: String): Boolean {
+        return symbol == symbol.uppercase() || repository.resolveAlias(symbol) != symbol.uppercase()
+    }
 
     private fun formatName(symbol: String, value: Double): String {
         val text = StringBuilder()
