@@ -82,7 +82,6 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.animation)
     implementation(libs.androidx.compose.animationgraphics)
-    implementation(libs.androidx.constraintlayout.compose)
 
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.navigation3.ui)
@@ -90,7 +89,8 @@ dependencies {
 
     implementation(libs.markdown)
 
-    implementation(libs.haze)
+    implementation(libs.haze.core)
+    implementation(libs.haze.blur)
 
     implementation(libs.androidx.core)
     implementation(libs.androidx.activitycompose)

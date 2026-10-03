@@ -95,7 +95,7 @@ import de.mm20.launcher2.ui.locals.LocalTimeFormat
 import de.mm20.launcher2.ui.theme.transparency.transparency
 import de.mm20.launcher2.ui.utils.formatPercent
 import de.mm20.launcher2.ui.utils.formatPrecipitation
-import de.mm20.launcher2.ui.utils.formatSpeed
+import de.mm20.launcher2.ui.utils.formatWindSpeed
 import de.mm20.launcher2.ui.utils.formatTemperature
 import de.mm20.launcher2.weather.DailyForecast
 import de.mm20.launcher2.weather.Forecast
@@ -252,6 +252,7 @@ fun CurrentWeather(
         context.packageManager.resolveActivity(
             Intent(Intent.ACTION_MAIN).also {
                 it.addCategory(Intent.CATEGORY_APP_WEATHER)
+                it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }, 0
         )
     }
@@ -487,7 +488,7 @@ private fun CurrentWeatherDetails(
                                 )
                             }
                         },
-                        formatSpeed(
+                        formatWindSpeed(
                             context,
                             forecast.windSpeed!!.toFloat(),
                             measurementSystem

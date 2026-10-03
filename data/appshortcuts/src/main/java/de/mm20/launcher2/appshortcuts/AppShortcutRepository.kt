@@ -9,6 +9,7 @@ import android.os.Looper
 import android.os.Process
 import android.os.UserHandle
 import androidx.core.content.getSystemService
+import de.mm20.launcher2.ktx.getSerialNumber
 import de.mm20.launcher2.permissions.PermissionGroup
 import de.mm20.launcher2.permissions.PermissionsManager
 import de.mm20.launcher2.preferences.search.ShortcutSearchSettings
@@ -24,6 +25,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.callbackFlow
@@ -84,17 +87,18 @@ internal class AppShortcutRepositoryImpl(
                 emptyList()
             }
             val appShortcuts = mutableListOf<LauncherShortcut>()
-            appShortcuts.addAll(shortcuts
-                ?.let {
-                    if (it.size > limit) it.subList(0, limit)
-                    else it
-                }
-                ?.map {
-                    LauncherShortcut(
-                        context,
-                        it,
-                    )
-                } ?: emptyList()
+            appShortcuts.addAll(
+                shortcuts
+                    ?.let {
+                        if (it.size > limit) it.subList(0, limit)
+                        else it
+                    }
+                    ?.map {
+                        LauncherShortcut(
+                            context,
+                            it,
+                        )
+                    } ?: emptyList()
             )
             appShortcuts
         }
@@ -115,62 +119,34 @@ internal class AppShortcutRepositoryImpl(
         return flags
     }
 
+    private class NormalizedShortcut(
+        val info: ShortcutInfo,
+        val normalizedLabels: List<String>,
+    )
+
     override fun search(query: String, allowNetwork: Boolean): Flow<ImmutableList<AppShortcut>> {
         if (query.length < 3) {
             return flowOf(persistentListOf())
         }
 
         val normalizedQuery = stringNormalizer.normalize(query)
+        return rawShortcuts.map { shortcuts ->
+            val filtered = shortcuts.mapIndexedNotNull { index, normalized ->
+                if (index % 8 == 0) currentCoroutineContext().ensureActive()
 
-        return combine(
-            listOf(
-                settings.enabled,
-                permissionsManager.hasPermission(PermissionGroup.AppShortcuts),
-                shortcutChangeEmitter
-            )
-        ) { it }
-            .map { (enabled, perm, _) ->
-                enabled as Boolean
-                perm as Boolean
-
-                if (enabled && perm) {
-                    val launcherApps =
-                        context.getSystemService<LauncherApps>() ?: return@map persistentListOf()
-
-
-                    val shortcutQuery = LauncherApps.ShortcutQuery()
-                    shortcutQuery.setQueryFlags(
-                        LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED or
-                                LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or
-                                LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST or
-                                LauncherApps.ShortcutQuery.FLAG_MATCH_CACHED or
-                                LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED_BY_ANY_LAUNCHER
-                    )
-                    val shortcuts = launcherApps.getShortcuts(shortcutQuery, Process.myUserHandle())
-                        ?.mapNotNull {
-                            val score = ResultScore.from(
-                                query = normalizedQuery,
-                                primaryFields = listOfNotNull(
-                                    it.longLabel?.toString()
-                                        ?.let { stringNormalizer.normalize(it) },
-                                    it.shortLabel?.toString()
-                                        ?.let { stringNormalizer.normalize(it) },
-                                )
-                            )
-                            if (score.score < 0.8f) return@mapNotNull null
-                            LauncherShortcut(
-                                context,
-                                it,
-                                score
-                            )
-                        } ?: emptyList()
-
-                    shortcuts.toImmutableList()
-
-                } else {
-                    persistentListOf()
-                }
-            }.flowOn(Dispatchers.Default)
+                val score = ResultScore.from(
+                    query = normalizedQuery,
+                    primaryFields = normalized.normalizedLabels,
+                )
+                if (score.score < 0.8f) return@mapIndexedNotNull null
+                LauncherShortcut(
+                    context,
+                    normalized.info,
+                    score
+                )
+            }.toImmutableList()
+            filtered
+        }.flowOn(Dispatchers.Default)
     }
 
     private val shortcutChangeEmitter = callbackFlow {
@@ -179,12 +155,15 @@ internal class AppShortcutRepositoryImpl(
 
         val callback = object : LauncherApps.Callback() {
             override fun onPackageRemoved(packageName: String?, user: UserHandle?) {
+                trySend(Unit)
             }
 
             override fun onPackageAdded(packageName: String?, user: UserHandle?) {
+                trySend(Unit)
             }
 
             override fun onPackageChanged(packageName: String?, user: UserHandle?) {
+                trySend(Unit)
             }
 
             override fun onPackagesAvailable(
@@ -192,6 +171,7 @@ internal class AppShortcutRepositoryImpl(
                 user: UserHandle?,
                 replacing: Boolean
             ) {
+                trySend(Unit)
             }
 
             override fun onPackagesUnavailable(
@@ -199,6 +179,7 @@ internal class AppShortcutRepositoryImpl(
                 user: UserHandle?,
                 replacing: Boolean
             ) {
+                trySend(Unit)
             }
 
             override fun onShortcutsChanged(
@@ -218,6 +199,46 @@ internal class AppShortcutRepositoryImpl(
             launcherApps.unregisterCallback(callback)
         }
     }.shareIn(scope, SharingStarted.WhileSubscribed(500), 1)
+
+    private val rawShortcuts: Flow<List<NormalizedShortcut>> = combine(
+        listOf(
+            settings.enabled,
+            settings.blocklist,
+            permissionsManager.hasPermission(PermissionGroup.AppShortcuts),
+            shortcutChangeEmitter
+        )
+    ) { (enabled, blocklist, perm, _) ->
+        enabled as Boolean
+        perm as Boolean
+        blocklist as Set<String>
+
+        if (!enabled || !perm) return@combine emptyList()
+
+        val launcherApps =
+            context.getSystemService<LauncherApps>() ?: return@combine emptyList()
+
+        val shortcutQuery = LauncherApps.ShortcutQuery()
+        shortcutQuery.setQueryFlags(
+            LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED or
+                    LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or
+                    LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST or
+                    LauncherApps.ShortcutQuery.FLAG_MATCH_CACHED or
+                    LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED_BY_ANY_LAUNCHER
+        )
+        val result = launcherApps.getShortcuts(shortcutQuery, Process.myUserHandle()) ?: emptyList()
+        val normalized = result.mapNotNull {
+            if ("${it.`package`}:${it.userHandle.getSerialNumber(context)}" in blocklist) return@mapNotNull null
+            NormalizedShortcut(
+                info = it,
+                normalizedLabels = listOfNotNull(
+                    it.longLabel?.toString()?.let { l -> stringNormalizer.normalize(l) },
+                    it.shortLabel?.toString()?.let { l -> stringNormalizer.normalize(l) },
+                )
+            )
+        }
+        normalized
+    }
+        .shareIn(scope, SharingStarted.Eagerly, replay = 1)
 
     override suspend fun getShortcutsConfigActivities(): List<AppShortcutConfigActivity> {
         val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as LauncherApps

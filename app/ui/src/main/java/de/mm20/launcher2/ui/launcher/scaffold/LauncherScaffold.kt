@@ -10,7 +10,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -32,6 +31,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imeAnimationSource
 import androidx.compose.foundation.layout.imeAnimationTarget
@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.systemGestures
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.waterfall
 import androidx.compose.foundation.layout.widthIn
@@ -65,10 +66,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
@@ -110,19 +113,19 @@ import de.mm20.launcher2.ui.launcher.search.SearchVM
 import de.mm20.launcher2.ui.launcher.search.filters.KeyboardFilterBar
 import de.mm20.launcher2.ui.launcher.searchbar.LauncherSearchBar
 import de.mm20.launcher2.ui.theme.transparency.transparency
-import dev.chrisbanes.haze.hazeEffect
+import dev.chrisbanes.haze.HazeInput
+import dev.chrisbanes.haze.blur.HazeBlurStyle
+import dev.chrisbanes.haze.blur.hazeBlur
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.absoluteValue
 import kotlin.math.pow
 import kotlin.math.roundToInt
-import kotlin.time.Duration.Companion.milliseconds
 
 enum class ScaffoldAnimation {
     Rubberband,
@@ -989,7 +992,7 @@ internal fun LauncherScaffold(
     val filterBarItems by searchVM.filterBarItems.collectAsState(emptyList())
     val launchOnEnter by searchVM.launchOnEnter.collectAsState(false)
 
-    val hazeState = rememberHazeState(blurEnabled = isAtLeastApiLevel(33))
+    val hazeState = rememberHazeState()
 
     BoxWithConstraints(
         modifier = modifier,
@@ -1289,19 +1292,31 @@ internal fun LauncherScaffold(
                 bottom = filterBarHeight
             )
 
+            val systemGestureBottomInset =
+                WindowInsets.systemGestures.getBottom(LocalDensity.current)
+
             CompositionLocalProvider(
                 LocalScaffoldPage provides ScaffoldPage.Home,
             ) {
                 config.homeComponent.Component(
                     Modifier
                         .fillMaxSize()
-                        .pointerInput(wallpaperManager, config.doubleTap) {
+                        .pointerInput(
+                            wallpaperManager,
+                            config.doubleTap,
+                            config.longPress,
+                            systemGestureBottomInset,
+                        ) {
                             detectTapGestures(
                                 onDoubleTap = config.doubleTap?.let {
                                     { scope.launch { state.onDoubleTap() } }
                                 },
                                 onLongPress = config.longPress?.let {
-                                    { scope.launch { state.onLongPress() } }
+                                    { offset ->
+                                        if (offset.y < (size.height - systemGestureBottomInset).toFloat()) {
+                                            scope.launch { state.onLongPress() }
+                                        }
+                                    }
                                 },
                                 onTap = {
                                     wallpaperManager.sendWallpaperCommand(
@@ -1415,12 +1430,15 @@ internal fun LauncherScaffold(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .hazeEffect(hazeState) {
-                        blurRadius = 4.dp
-                        backgroundColor = config.backgroundColor
-                    }
+                    .hazeBlur(
+                        input = HazeInput.Backdrop(hazeState),
+                        style = HazeBlurStyle {
+                            blurEnabled(isAtLeastApiLevel(33))
+                            blurRadius(4.dp)
+                        }
+                    )
                     .background(
-                        MaterialTheme.colorScheme.surfaceContainer.copy(alpha = MaterialTheme.transparency.background)
+                        MaterialTheme.colorScheme.surfaceContainer.copy(alpha = MaterialTheme.transparency.background),
                     )
                     .statusBarsPadding()
             )
@@ -1436,10 +1454,12 @@ internal fun LauncherScaffold(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .hazeEffect(hazeState) {
-                        blurRadius = 4.dp
-                        backgroundColor = config.backgroundColor
-                    }
+                    .hazeBlur(
+                        input = HazeInput.Backdrop(hazeState),
+                        style = HazeBlurStyle {
+                            blurRadius(4.dp)
+                        }
+                    )
                     .background(
                         MaterialTheme.colorScheme.surfaceContainer.copy(alpha = MaterialTheme.transparency.background)
                     )

@@ -87,6 +87,7 @@ data class LauncherSettingsData internal constructor(
     val calendarSearchExcludedCalendars: Set<String> = setOf(),
 
     val shortcutSearchEnabled: Boolean = true,
+    val shortcutSearchBlocklist: Set<String> = setOf(),
 
     val calculatorEnabled: Boolean = true,
 
@@ -468,9 +469,29 @@ enum class TimeFormat {
 
 @Serializable
 enum class MeasurementSystem {
+    /**
+     * Use the system default measurement system, based on the device locale.
+     */
     @SerialName("system") System,
+
+    /**
+     * Metric system (°C, km/h, mm, km, etc.)
+     */
     @SerialName("metric") Metric,
+
+    /**
+     * Nordic/scientific metric system (°C, m/s, mm, km, etc.)
+     */
+    @SerialName("scientific") MetricScientific,
+
+    /**
+     * UK hybrid system (°C, mph, mm, mi, etc.)
+     */
     @SerialName("uk") UnitedKingdom,
+
+    /**
+     * US customary system (°F, mph, in, mi, etc.)
+     */
     @SerialName("us") UnitedStates,
 }
 
