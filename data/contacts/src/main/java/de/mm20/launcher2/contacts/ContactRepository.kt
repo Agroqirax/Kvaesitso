@@ -1,13 +1,16 @@
 package de.mm20.launcher2.contacts
 
 import android.content.Context
+import de.mm20.launcher2.contacts.providers.AndroidContact
 import de.mm20.launcher2.contacts.providers.AndroidContactProvider
 import de.mm20.launcher2.contacts.providers.PluginContactProvider
 import de.mm20.launcher2.permissions.PermissionGroup
 import de.mm20.launcher2.permissions.PermissionsManager
 import de.mm20.launcher2.preferences.search.ContactSearchSettings
 import de.mm20.launcher2.search.Contact
+import de.mm20.launcher2.search.ResultScore
 import de.mm20.launcher2.search.SearchableRepository
+import de.mm20.launcher2.search.StringNormalizer
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,6 +25,7 @@ internal class ContactRepository(
     private val context: Context,
     private val permissionsManager: PermissionsManager,
     private val settings: ContactSearchSettings,
+    private val stringNormalizer: StringNormalizer,
 ) : SearchableRepository<Contact> {
 
     override fun search(query: String, allowNetwork: Boolean): Flow<List<Contact>> {
@@ -32,6 +36,8 @@ internal class ContactRepository(
                 emit(persistentListOf())
             }
         }
+
+        val normalizedQuery = stringNormalizer.normalize(query)
 
         return hasPermission.combineTransform(settings.enabledProviders) { perm, providerIds ->
             val providers = providerIds.mapNotNull {
@@ -50,11 +56,24 @@ internal class ContactRepository(
                             query,
                             allowNetwork = allowNetwork,
                         )
-                        result.update { it + r }
+                        result.update { it + r.map { it.withScore(normalizedQuery) } }
                     }
                 }
                 emitAll(result)
             }
         }
+    }
+
+    /**
+     * Nicknames are not part of the label, so the default ranking would not take them into account.
+     */
+    private fun Contact.withScore(normalizedQuery: String): Contact {
+        if (this !is AndroidContact) return this
+        return copy(
+            score = ResultScore.from(
+                query = normalizedQuery,
+                primaryFields = (nicknames + name).map { stringNormalizer.normalize(it) },
+            )
+        )
     }
 }

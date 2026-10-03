@@ -14,6 +14,7 @@ import de.mm20.launcher2.icons.StaticLauncherIcon
 import de.mm20.launcher2.ktx.asBitmap
 import de.mm20.launcher2.ktx.tryStartActivity
 import de.mm20.launcher2.search.Contact
+import de.mm20.launcher2.search.ResultScore
 import de.mm20.launcher2.search.SearchableSerializer
 import de.mm20.launcher2.search.contact.CustomContactAction
 import de.mm20.launcher2.search.contact.EmailAddress
@@ -29,7 +30,9 @@ internal data class AndroidContact(
     override val emailAddresses: List<EmailAddress>,
     override val postalAddresses: List<PostalAddress>,
     override val customActions: List<CustomContactAction>, internal val lookupKey: String,
+    internal val nicknames: List<String> = emptyList(),
     override val labelOverride: String? = null,
+    override val score: ResultScore = ResultScore.Unspecified,
 ) : Contact {
 
 

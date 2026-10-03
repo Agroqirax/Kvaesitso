@@ -44,6 +44,21 @@ internal class AndroidContactProvider(
                 contactMap.getOrPut(cursor.getLong(0)) { mutableSetOf() }.add(cursor.getLong(1))
             }
             cursor.close()
+
+            // Nicknames are not a column of the raw contact, they are stored as data rows
+            context.contentResolver.query(
+                ContactsContract.Data.CONTENT_URI,
+                arrayOf(ContactsContract.Data.CONTACT_ID, ContactsContract.Data.RAW_CONTACT_ID),
+                "${ContactsContract.Data.MIMETYPE} = ? AND ${ContactsContract.CommonDataKinds.Nickname.NAME} LIKE ?",
+                arrayOf(ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE, "%$query%"),
+                null
+            )?.use { nicknameCursor ->
+                while (nicknameCursor.moveToNext()) {
+                    val contactId = nicknameCursor.getLongOrNull(0) ?: continue
+                    contactMap.getOrPut(contactId) { mutableSetOf() }.add(nicknameCursor.getLong(1))
+                }
+            }
+
             val results = mutableListOf<Contact>()
             for ((id, rawIds) in contactMap) {
                 getWithRawIds(id, rawIds)?.let { results.add(it) }
@@ -71,6 +86,7 @@ internal class AndroidContactProvider(
             val emailAddresses = mutableListOf<EmailAddress>()
             val postalAddresses = mutableListOf<PostalAddress>()
             val customActions = mutableListOf<CustomContactAction>()
+            val nicknames = mutableListOf<String>()
 
             val mimeTypeColumn = dataCursor.getColumnIndex(ContactsContract.Data.MIMETYPE)
             val typeColumn =
@@ -89,6 +105,9 @@ internal class AndroidContactProvider(
                 dataCursor.getColumnIndex(ContactsContract.CommonDataKinds.StructuredName.FAMILY_NAME)
             val accountTypeColumn =
                 dataCursor.getColumnIndex(ContactsContract.Data.ACCOUNT_TYPE_AND_DATA_SET)
+
+            val nicknameColumn =
+                dataCursor.getColumnIndex(ContactsContract.CommonDataKinds.Nickname.NAME)
 
             val data3Column = dataCursor.getColumnIndex(ContactsContract.Data.DATA3)
             val idColumn = dataCursor.getColumnIndex(ContactsContract.Data._ID)
@@ -137,6 +156,11 @@ internal class AndroidContactProvider(
                         lastName = dataCursor.getStringOrNull(familyNameColumn)
                         displayName = dataCursor.getStringOrNull(displayNameColumn)
                     }
+
+                    ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE ->
+                        dataCursor.getStringOrNull(nicknameColumn)
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { nicknames += it }
 
                     else -> {
                         customActions += CustomContactAction(
@@ -191,6 +215,7 @@ internal class AndroidContactProvider(
                 emailAddresses = emailAddresses.distinct(),
                 postalAddresses = postalAddresses.distinct(),
                 customActions = customActions.distinct(),
+                nicknames = nicknames.distinct(),
                 lookupKey = lookUpKey
             )
         }
