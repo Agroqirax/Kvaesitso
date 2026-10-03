@@ -12,6 +12,6 @@ import org.koin.dsl.module
 val contactsModule = module {
     factory { ContactRepository(androidContext(), get(), get(), get()) }
     factory<SearchableRepository<Contact>>(named<Contact>()) { get<ContactRepository>() }
-    factory<SearchableDeserializer>(named(AndroidContact.Domain)) { AndroidContactDeserializer(androidContext(), get()) }
+    factory<SearchableDeserializer>(named(AndroidContact.Domain)) { AndroidContactDeserializer(androidContext(), get(), get()) }
     factory<SearchableDeserializer>(named(PluginContact.Domain)) { PluginContactDeserializer(androidContext(), get()) }
 }

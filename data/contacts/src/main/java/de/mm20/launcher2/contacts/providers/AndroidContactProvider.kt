@@ -9,6 +9,8 @@ import androidx.core.database.getLongOrNull
 import androidx.core.database.getStringOrNull
 import de.mm20.launcher2.ktx.distinctByEquality
 import de.mm20.launcher2.search.Contact
+import de.mm20.launcher2.search.ResultScore
+import de.mm20.launcher2.search.StringNormalizer
 import de.mm20.launcher2.search.contact.ContactInfoType
 import de.mm20.launcher2.search.contact.CustomContactAction
 import de.mm20.launcher2.search.contact.EmailAddress
@@ -16,52 +18,107 @@ import de.mm20.launcher2.search.contact.PhoneNumber
 import de.mm20.launcher2.search.contact.PostalAddress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * A contact provider that uses the Android ContactsContract API to search for contacts.
  */
 internal class AndroidContactProvider(
     private val context: Context,
+    private val stringNormalizer: StringNormalizer,
 ) : ContactProvider {
+
+    /**
+     * Normalized strings by their original value, for the normalizer with the given id.
+     * Normalizing is expensive, and search needs to normalize the names of all contacts.
+     */
+    @Volatile
+    private var normalizerCache = "" to ConcurrentHashMap<String, String>()
+
+    private fun normalize(input: String): String {
+        val id = stringNormalizer.id
+        var cache = normalizerCache
+        if (cache.first != id) {
+            cache = id to ConcurrentHashMap()
+            normalizerCache = cache
+        }
+        return cache.second.getOrPut(input) { stringNormalizer.normalize(input) }
+    }
+
     override suspend fun search(
         query: String,
         allowNetwork: Boolean
     ): List<Contact> {
         val results = withContext(Dispatchers.IO) {
+            val normalizedQuery = normalize(query)
+            if (normalizedQuery.isEmpty()) return@withContext emptyList()
+
+            // The contacts provider can only match the raw query (LIKE), so the names of all
+            // contacts are loaded and matched against the normalized query instead.
             val proj = arrayOf(
                 ContactsContract.RawContacts.CONTACT_ID,
-                ContactsContract.RawContacts._ID
+                ContactsContract.RawContacts._ID,
+                ContactsContract.RawContacts.DISPLAY_NAME_PRIMARY,
+                ContactsContract.RawContacts.DISPLAY_NAME_ALTERNATIVE,
+                ContactsContract.RawContacts.PHONETIC_NAME,
+                ContactsContract.RawContacts.SORT_KEY_PRIMARY,
             )
-            val sel =
-                "${ContactsContract.RawContacts.DISPLAY_NAME_PRIMARY} LIKE ? OR ${ContactsContract.RawContacts.DISPLAY_NAME_ALTERNATIVE} LIKE ? OR ${ContactsContract.RawContacts.PHONETIC_NAME} LIKE ? OR ${ContactsContract.RawContacts.SORT_KEY_PRIMARY} LIKE ?"
-            val selArgs = arrayOf("%$query%", "%$query%", "%$query%", "%$query%")
             val cursor = context.contentResolver.query(
-                ContactsContract.RawContacts.CONTENT_URI, proj, sel, selArgs, null
-            ) ?: return@withContext mutableListOf()
-            //Maps raw contact ids to contact ids
+                ContactsContract.RawContacts.CONTENT_URI, proj, null, null, null
+            ) ?: return@withContext emptyList()
+            //Maps contact ids to raw contact ids
             val contactMap = mutableMapOf<Long, MutableSet<Long>>()
+            val primaryFields = mutableMapOf<Long, MutableSet<String>>()
+            val secondaryFields = mutableMapOf<Long, MutableSet<String>>()
             while (cursor.moveToNext()) {
-                contactMap.getOrPut(cursor.getLong(0)) { mutableSetOf() }.add(cursor.getLong(1))
+                val contactId = cursor.getLongOrNull(0) ?: continue
+                contactMap.getOrPut(contactId) { mutableSetOf() }.add(cursor.getLong(1))
+                cursor.getStringOrNull(2)?.let {
+                    primaryFields.getOrPut(contactId) { mutableSetOf() }.add(normalize(it))
+                }
+                for (column in 3..5) {
+                    cursor.getStringOrNull(column)?.let {
+                        secondaryFields.getOrPut(contactId) { mutableSetOf() }.add(normalize(it))
+                    }
+                }
             }
             cursor.close()
 
             // Nicknames are not a column of the raw contact, they are stored as data rows
             context.contentResolver.query(
                 ContactsContract.Data.CONTENT_URI,
-                arrayOf(ContactsContract.Data.CONTACT_ID, ContactsContract.Data.RAW_CONTACT_ID),
-                "${ContactsContract.Data.MIMETYPE} = ? AND ${ContactsContract.CommonDataKinds.Nickname.NAME} LIKE ?",
-                arrayOf(ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE, "%$query%"),
+                arrayOf(
+                    ContactsContract.Data.CONTACT_ID,
+                    ContactsContract.CommonDataKinds.Nickname.NAME
+                ),
+                "${ContactsContract.Data.MIMETYPE} = ?",
+                arrayOf(ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE),
                 null
             )?.use { nicknameCursor ->
                 while (nicknameCursor.moveToNext()) {
                     val contactId = nicknameCursor.getLongOrNull(0) ?: continue
-                    contactMap.getOrPut(contactId) { mutableSetOf() }.add(nicknameCursor.getLong(1))
+                    val nickname = nicknameCursor.getStringOrNull(1) ?: continue
+                    if (contactId !in contactMap) continue
+                    primaryFields.getOrPut(contactId) { mutableSetOf() }.add(normalize(nickname))
                 }
             }
 
+            val matches = contactMap.keys.mapNotNull { id ->
+                val primary = primaryFields[id].orEmpty()
+                val secondary = secondaryFields[id].orEmpty()
+                if (primary.none { normalizedQuery in it } && secondary.none { normalizedQuery in it }) {
+                    return@mapNotNull null
+                }
+                id to ResultScore.from(
+                    query = normalizedQuery,
+                    primaryFields = primary,
+                    secondaryFields = secondary,
+                )
+            }.sortedByDescending { it.second }
+
             val results = mutableListOf<Contact>()
-            for ((id, rawIds) in contactMap) {
-                getWithRawIds(id, rawIds)?.let { results.add(it) }
+            for ((id, score) in matches) {
+                getWithRawIds(id, contactMap.getValue(id), score)?.let { results.add(it) }
                 if (results.size > 15) break
             }
             results
@@ -72,7 +129,11 @@ internal class AndroidContactProvider(
     /**
      * Combine the given raw contact ids into a single contact.
      */
-    private suspend fun getWithRawIds(id: Long, rawIds: Set<Long>): Contact? =
+    private suspend fun getWithRawIds(
+        id: Long,
+        rawIds: Set<Long>,
+        score: ResultScore = ResultScore.Unspecified,
+    ): Contact? =
         withContext(Dispatchers.IO) {
             val s = "${ContactsContract.Data.RAW_CONTACT_ID} IN (${rawIds.joinToString(", ")})"
             val dataCursor = context.contentResolver.query(
@@ -86,7 +147,6 @@ internal class AndroidContactProvider(
             val emailAddresses = mutableListOf<EmailAddress>()
             val postalAddresses = mutableListOf<PostalAddress>()
             val customActions = mutableListOf<CustomContactAction>()
-            val nicknames = mutableListOf<String>()
 
             val mimeTypeColumn = dataCursor.getColumnIndex(ContactsContract.Data.MIMETYPE)
             val typeColumn =
@@ -105,9 +165,6 @@ internal class AndroidContactProvider(
                 dataCursor.getColumnIndex(ContactsContract.CommonDataKinds.StructuredName.FAMILY_NAME)
             val accountTypeColumn =
                 dataCursor.getColumnIndex(ContactsContract.Data.ACCOUNT_TYPE_AND_DATA_SET)
-
-            val nicknameColumn =
-                dataCursor.getColumnIndex(ContactsContract.CommonDataKinds.Nickname.NAME)
 
             val data3Column = dataCursor.getColumnIndex(ContactsContract.Data.DATA3)
             val idColumn = dataCursor.getColumnIndex(ContactsContract.Data._ID)
@@ -156,11 +213,6 @@ internal class AndroidContactProvider(
                         lastName = dataCursor.getStringOrNull(familyNameColumn)
                         displayName = dataCursor.getStringOrNull(displayNameColumn)
                     }
-
-                    ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE ->
-                        dataCursor.getStringOrNull(nicknameColumn)
-                            ?.takeIf { it.isNotBlank() }
-                            ?.let { nicknames += it }
 
                     else -> {
                         customActions += CustomContactAction(
@@ -215,8 +267,8 @@ internal class AndroidContactProvider(
                 emailAddresses = emailAddresses.distinct(),
                 postalAddresses = postalAddresses.distinct(),
                 customActions = customActions.distinct(),
-                nicknames = nicknames.distinct(),
-                lookupKey = lookUpKey
+                lookupKey = lookUpKey,
+                score = score,
             )
         }
 

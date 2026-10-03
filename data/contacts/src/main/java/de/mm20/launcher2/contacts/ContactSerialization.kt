@@ -14,6 +14,7 @@ import de.mm20.launcher2.plugin.config.StorageStrategy
 import de.mm20.launcher2.search.SavableSearchable
 import de.mm20.launcher2.search.SearchableDeserializer
 import de.mm20.launcher2.search.SearchableSerializer
+import de.mm20.launcher2.search.StringNormalizer
 import de.mm20.launcher2.search.UpdateResult
 import de.mm20.launcher2.search.asUpdateResult
 import de.mm20.launcher2.search.contact.CustomContactAction
@@ -89,14 +90,15 @@ internal class PluginContactSerializer : SearchableSerializer {
 
 internal class AndroidContactDeserializer(
     private val context: Context,
-    private val permissionsManager: PermissionsManager
+    private val permissionsManager: PermissionsManager,
+    private val stringNormalizer: StringNormalizer,
 ) : SearchableDeserializer {
 
     override suspend fun deserialize(serialized: String): SavableSearchable? {
         if (!permissionsManager.checkPermissionOnce(PermissionGroup.Contacts)) return null
         val id = JSONObject(serialized).getLong("id")
 
-        val androidContactProvider = AndroidContactProvider(context)
+        val androidContactProvider = AndroidContactProvider(context, stringNormalizer)
 
         return androidContactProvider.get(id)
     }

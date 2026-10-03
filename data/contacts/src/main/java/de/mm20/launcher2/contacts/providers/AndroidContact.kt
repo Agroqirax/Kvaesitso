@@ -30,7 +30,6 @@ internal data class AndroidContact(
     override val emailAddresses: List<EmailAddress>,
     override val postalAddresses: List<PostalAddress>,
     override val customActions: List<CustomContactAction>, internal val lookupKey: String,
-    internal val nicknames: List<String> = emptyList(),
     override val labelOverride: String? = null,
     override val score: ResultScore = ResultScore.Unspecified,
 ) : Contact {
